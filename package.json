@@ -1,0 +1,7 @@
+{
+  "name": "chairman-20",
+  "version": "1.0.0",
+  "private": true,
+  "description": "정이석 회장 개인용 문자발송 시스템 (주민협의회 회원 대상)",
+  "engines": { "node": ">=20" }
+}

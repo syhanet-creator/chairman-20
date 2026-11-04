@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1f4e8c">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg">
+<title>회장님 문자발송</title>
+<style>
+:root{--pri:#1f4e8c;--bg:#f3f5f9;--card:#fff;--line:#dfe4ec;--txt:#1b2230;--mut:#6b7587;--ok:#1a8a4a;--bad:#c62828;--warn:#b26a00}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 -apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;padding-bottom:76px}
+header{background:var(--pri);color:#fff;padding:14px 16px;position:sticky;top:0;z-index:5;display:flex;justify-content:space-between;align-items:center}
+header h1{margin:0;font-size:17px}
+header small{opacity:.85}
+main{max-width:760px;margin:0 auto;padding:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.card h2{margin:0 0 10px;font-size:15px}
+label{display:block;font-size:13px;color:var(--mut);margin:8px 0 4px}
+input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff}
+textarea{min-height:160px;resize:vertical}
+button{border:0;border-radius:8px;padding:10px 14px;font:inherit;font-weight:600;background:var(--pri);color:#fff;cursor:pointer}
+button.sec{background:#e8edf5;color:var(--pri)}
+button.bad{background:var(--bad)}
+button:disabled{opacity:.5}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row>*{flex:1}
+.row>button{flex:0 0 auto}
+.mut{color:var(--mut);font-size:13px}
+.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;background:#e8edf5;color:var(--pri)}
+.pill.ok{background:#e1f4e8;color:var(--ok)}.pill.bad{background:#fde7e7;color:var(--bad)}.pill.warn{background:#fff1d9;color:var(--warn)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;background:none;color:var(--mut);border-radius:0;padding:12px 4px;font-size:13px}
+nav button.on{color:var(--pri)}
+.hide{display:none!important}
+.bar{height:10px;background:#e8edf5;border-radius:99px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--pri);width:0;transition:width .2s}
+.banner{padding:10px 12px;border-radius:8px;margin-bottom:12px;font-size:14px}
+.banner.practice{background:#fff1d9;color:var(--warn)}.banner.live{background:#e1f4e8;color:var(--ok)}
+#login{max-width:360px;margin:18vh auto;padding:0 16px}
+.msgbox{white-space:pre-wrap;background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:14px}
+</style>
+</head>
+<body>
+
+<div id="login" class="hide">
+  <div class="card">
+    <h2>회장님 문자발송 시스템</h2>
+    <label>비밀번호</label>
+    <input id="pw" type="password" autocomplete="current-password">
+    <div style="margin-top:12px"><button id="btnLogin" style="width:100%">로그인</button></div>
+    <p id="loginErr" class="mut" style="color:var(--bad)"></p>
+  </div>
+</div>
+
+<div id="app" class="hide">
+<header><h1>📨 회장님 문자발송</h1><small id="hdrInfo"></small></header>
+<main>
+  <div id="modeBanner" class="banner practice"></div>
+
+  <!-- 발송 -->
+  <section id="tab-send">
+    <div class="card">
+      <h2>문자 작성</h2>
+      <div class="row">
+        <div><label>대상 구분</label><select id="selCat"><option value="">전체 회원</option></select></div>
+        <div><label>불러오기</label><select id="selTpl"><option value="">템플릿 선택</option></select></div>
+      </div>
+      <label>제목(관리용, 발송되지 않음)</label>
+      <input id="msgTitle" placeholder="예: 11월 정기총회 안내">
+      <label>내용</label>
+      <textarea id="msgBody" placeholder="문자 내용을 입력하세요"></textarea>
+      <div class="row" style="margin-top:6px">
+        <span class="mut" id="byteInfo">0 byte · 단문</span>
+        <label style="margin:0;display:flex;gap:6px;align-items:center;flex:0 0 auto"><input type="checkbox" id="isAd" style="width:auto"> 광고성 문자</label>
+      </div>
+      <p class="mut" id="adNote"></p>
+      <div class="row" style="margin-top:10px">
+        <button class="sec" id="btnSaveTpl">템플릿 저장</button>
+        <button id="btnPrepare">발송 확인</button>
+      </div>
+    </div>
+    <div id="confirmBox" class="card hide">
+      <h2>발송 전 확인</h2>
+      <p>발신번호 <b id="cfFrom"></b></p>
+      <p>수신 대상 <b id="cfCount"></b>명 · <span id="cfType"></span></p>
+      <div class="msgbox" id="cfBody"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="sec" id="btnCancel">취소</button>
+        <button class="bad" id="btnGo">발송 시작</button>
+      </div>
+    </div>
+    <div id="progBox" class="card hide">
+      <h2>발송 진행</h2>
+      <div class="bar"><i id="progBar"></i></div>
+      <p id="progTxt" class="mut"></p>
+    </div>
+  </section>
+
+  <!-- 수신자 -->
+  <section id="tab-contacts" class="hide">
+    <div class="card">
+      <h2>수신자 가져오기 (CSV)</h2>
+      <p class="mut">엑셀에서 「CSV(쉼표로 분리)」로 저장한 파일. 첫 줄 제목행에 <b>이름, 연락처(전화번호·휴대폰), 구분, 메모</b> 열이 있으면 자동 인식합니다. 같은 번호는 덮어씁니다.</p>
+      <input type="file" id="csvFile" accept=".csv,text/csv">
+      <p id="importMsg" class="mut"></p>
+    </div>
+    <div class="card">
+      <h2>수신자 목록 <span class="mut" id="statTxt"></span></h2>
+      <div class="row">
+        <input id="qSearch" placeholder="이름·번호 검색">
+        <select id="qStatus"><option value="">전체</option><option value="optout">수신거부</option><option value="inactive">비활성</option></select>
+      </div>
+      <div style="overflow-x:auto;margin-top:8px"><table><thead><tr><th>이름</th><th>번호</th><th>구분</th><th></th></tr></thead><tbody id="ctBody"></tbody></table></div>
+      <div class="row" style="margin-top:8px;justify-content:center"><button class="sec" id="ctPrev">이전</button><span class="mut" id="ctPage" style="text-align:center"></span><button class="sec" id="ctNext">다음</button></div>
+    </div>
+    <div class="card">
+      <h2>수신자 1명 추가</h2>
+      <div class="row"><input id="nName" placeholder="이름"><input id="nPhone" placeholder="010-0000-0000" inputmode="tel"></div>
+      <div class="row" style="margin-top:8px"><input id="nCat" placeholder="구분(선택)"><button id="btnAdd">추가</button></div>
+    </div>
+  </section>
+
+  <!-- 이력 -->
+  <section id="tab-history" class="hide">
+    <div id="histList"></div>
+    <div id="histDetail" class="card hide"></div>
+  </section>
+
+  <!-- 설정 -->
+  <section id="tab-settings" class="hide">
+    <div class="card">
+      <h2>발신 설정</h2>
+      <label>발신번호(고정)</label>
+      <input id="sNumber" disabled>
+      <p class="mut">발신번호는 문자 공급자(솔라피)에 <b>본인 인증으로 사전 등록</b>된 번호여야 실발송됩니다.</p>
+      <div class="row"><div><label>발신자 표기</label><input id="sLabel"></div><div><label>단체명</label><input id="sOrg"></div></div>
+      <label>광고성 문자 수신거부 문구</label>
+      <input id="sFooter">
+      <label>1회 처리 건수(서버 호출당)</label>
+      <input id="sChunk" type="number" min="50" max="1000">
+      <label>발송 모드</label>
+      <select id="sProvider"><option value="console">연습모드(실제 발송 안 함)</option><option value="solapi">실발송(솔라피)</option></select>
+      <p class="mut" id="solapiNote"></p>
+      <div style="margin-top:10px"><button id="btnSaveSettings">저장</button></div>
+    </div>
+    <div class="card"><button class="sec" id="btnLogout">로그아웃</button></div>
+  </section>
+</main>
+<nav>
+  <button data-tab="send" class="on">✉️<br>발송</button>
+  <button data-tab="contacts">👥<br>수신자</button>
+  <button data-tab="history">🗂️<br>이력</button>
+  <button data-tab="settings">⚙️<br>설정</button>
+</nav>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let token = localStorage.getItem('c20_token') || '';
+let settings = null, ctPage = 1, pending = null;
+
+async function api(action, { method = 'GET', body, query } = {}) {
+  const qs = new URLSearchParams(query || {}).toString();
+  const res = await fetch(`/api/${action}${qs ? '?' + qs : ''}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await res.json().catch(() => ({}));
+  if (res.status === 401 && action !== 'login') { logout(); throw new Error('로그인이 필요합니다.'); }
+  if (!res.ok) throw new Error(j.error || '오류');
+  return j;
+}
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmtPhone = (p) => p.replace(/^(\d{3})(\d{3,4})(\d{4})$/, '$1-$2-$3');
+const fmtDate = (d) => d ? new Date(d).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' }) : '';
+const byteLen = (s) => [...s].reduce((n, c) => n + (c.charCodeAt(0) > 127 ? 2 : 1), 0);
+
+// ---------- 로그인 ----------
+function logout() { token = ''; localStorage.removeItem('c20_token'); showLogin(); }
+function showLogin() { $('#app').classList.add('hide'); $('#login').classList.remove('hide'); }
+$('#btnLogin').onclick = async () => {
+  try {
+    const r = await api('login', { method: 'POST', body: { password: $('#pw').value } });
+    token = r.token; localStorage.setItem('c20_token', token); $('#pw').value = ''; start();
+  } catch (e) { $('#loginErr').textContent = e.message; }
+};
+$('#pw').onkeydown = (e) => { if (e.key === 'Enter') $('#btnLogin').click(); };
+$('#btnLogout').onclick = logout;
+
+// ---------- 탭 ----------
+document.querySelectorAll('nav button').forEach((b) => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('on', x === b));
+  ['send', 'contacts', 'history', 'settings'].forEach((t) => $('#tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
+  if (b.dataset.tab === 'contacts') loadContacts();
+  if (b.dataset.tab === 'history') loadHistory();
+  if (b.dataset.tab === 'settings') loadSettings();
+});
+
+// ---------- 시작 ----------
+async function start() {
+  try {
+    await loadSettings();
+    $('#login').classList.add('hide'); $('#app').classList.remove('hide');
+    await Promise.all([loadCategories(), loadTemplates(), loadStats()]);
+  } catch (e) { showLogin(); }
+}
+
+async function loadSettings() {
+  settings = await api('settings');
+  $('#sNumber').value = fmtPhone(settings.sender_number);
+  $('#sLabel').value = settings.sender_label; $('#sOrg').value = settings.org_name;
+  $('#sFooter').value = settings.ad_footer; $('#sChunk').value = settings.chunk_size;
+  $('#sProvider').value = settings.provider;
+  $('#solapiNote').textContent = settings.solapi_ready ? '솔라피 키가 설정되어 있습니다.' : '솔라피 키가 아직 서버에 설정되지 않았습니다. (연동 후 실발송 선택 가능)';
+  $('#hdrInfo').textContent = `발신 ${fmtPhone(settings.sender_number)}`;
+  const live = settings.provider === 'solapi';
+  $('#modeBanner').className = 'banner ' + (live ? 'live' : 'practice');
+  $('#modeBanner').textContent = live ? '실발송 모드 — 실제 문자가 발송됩니다.' : '연습모드 — 실제 문자는 발송되지 않고 이력만 기록됩니다.';
+}
+$('#btnSaveSettings').onclick = async () => {
+  try {
+    await api('settings', { method: 'PUT', body: {
+      sender_label: $('#sLabel').value, org_name: $('#sOrg').value, ad_footer: $('#sFooter').value,
+      chunk_size: $('#sChunk').value, provider: $('#sProvider').value } });
+    await loadSettings(); alert('저장했습니다.');
+  } catch (e) { alert(e.message); await loadSettings(); }
+};
+
+async function loadCategories() {
+  const cats = await api('categories');
+  $('#selCat').innerHTML = '<option value="">전체 회원</option>' + cats.map((c) => `<option>${esc(c)}</option>`).join('');
+}
+async function loadTemplates() {
+  const t = await api('templates');
+  $('#selTpl').innerHTML = '<option value="">템플릿 선택</option>' + t.map((x) => `<option value="${x.id}" data-b="${esc(x.body)}" data-t="${esc(x.title)}">${esc(x.title)}</option>`).join('');
+}
+async function loadStats() {
+  const s = await api('stats');
+  $('#statTxt').textContent = `· 전체 ${s.total ?? 0} / 발송가능 ${s.sendable ?? 0} / 수신거부 ${s.optout ?? 0}`;
+}
+
+// ---------- 작성 ----------
+function updateBytes() {
+  const t = $('#msgBody').value, n = byteLen(t);
+  $('#byteInfo').textContent = `${n} byte · ${n > 90 ? '장문(LMS)' : '단문(SMS)'}`;
+  $('#adNote').textContent = $('#isAd').checked ? '광고성 문자는 (광고) 표기와 수신거부 문구가 자동으로 붙으며, 오후 9시~오전 8시 발송은 법으로 제한됩니다.' : '';
+}
+$('#msgBody').oninput = updateBytes; $('#isAd').onchange = updateBytes;
+$('#selTpl').onchange = (e) => {
+  const o = e.target.selectedOptions[0];
+  if (o && o.value) { $('#msgBody').value = o.dataset.b; $('#msgTitle').value = o.dataset.t; updateBytes(); }
+};
+$('#btnSaveTpl').onclick = async () => {
+  const body = $('#msgBody').value.trim(); const title = $('#msgTitle').value.trim() || body.slice(0, 15);
+  if (!body) return alert('내용을 입력하세요.');
+  await api('templates', { method: 'POST', body: { title, body } }); await loadTemplates(); alert('템플릿에 저장했습니다.');
+};
+$('#btnPrepare').onclick = async () => {
+  const body = $('#msgBody').value.trim();
+  if (!body) return alert('내용을 입력하세요.');
+  const cat = $('#selCat').value;
+  const q = cat ? `&category=${encodeURIComponent(cat)}` : '';
+  const c = await api('contacts', { query: { size: 1, page: 1, category: cat } });
+  const s = await api('stats');
+  const count = cat ? c.total : s.sendable;
+  pending = { body, title: $('#msgTitle').value.trim(), category: cat, is_ad: $('#isAd').checked };
+  $('#cfFrom').textContent = fmtPhone(settings.sender_number);
+  $('#cfCount').textContent = count.toLocaleString() + (cat ? ' (구분 전체 중 수신거부 제외 후 확정)' : '');
+  $('#cfType').textContent = byteLen(body) > 90 ? '장문(LMS)' : '단문(SMS)';
+  $('#cfBody').textContent = body;
+  $('#confirmBox').classList.remove('hide');
+  $('#confirmBox').scrollIntoView({ behavior: 'smooth' });
+};
+$('#btnCancel').onclick = () => { pending = null; $('#confirmBox').classList.add('hide'); };
+$('#btnGo').onclick = async () => {
+  if (!pending) return;
+  const live = settings.provider === 'solapi';
+  if (!confirm(live ? '실제 문자가 발송됩니다. 진행할까요?' : '연습모드로 진행합니다.')) return;
+  $('#btnGo').disabled = true; $('#confirmBox').classList.add('hide'); $('#progBox').classList.remove('hide');
+  try {
+    $('#progTxt').textContent = '수신자 확정 중…';
+    const cr = await api('send_create', { method: 'POST', body: pending });
+    let last;
+    for (;;) {
+      last = await api('send_chunk', { method: 'POST', body: { message_id: cr.message_id } });
+      const done = last.sent + last.failed;
+      $('#progBar').style.width = Math.round((done / cr.total) * 100) + '%';
+      $('#progTxt').textContent = `${done.toLocaleString()} / ${cr.total.toLocaleString()} 처리 (성공 ${last.sent.toLocaleString()} · 실패 ${last.failed.toLocaleString()})`;
+      if (last.pending === 0) break;
+    }
+    $('#progTxt').textContent += ' — 완료';
+    pending = null; $('#msgBody').value = ''; $('#msgTitle').value = ''; updateBytes();
+  } catch (e) { $('#progTxt').textContent = '오류: ' + e.message + ' (이력 탭에서 이어서 확인할 수 있습니다)'; }
+  $('#btnGo').disabled = false;
+};
+
+// ---------- 수신자 ----------
+async function loadContacts() {
+  const r = await api('contacts', { query: { page: ctPage, size: 50, q: $('#qSearch').value, status: $('#qStatus').value } });
+  $('#ctBody').innerHTML = r.rows.map((c) => `<tr><td>${esc(c.name)}${c.opt_out ? ' <span class="pill bad">수신거부</span>' : ''}${c.active ? '' : ' <span class="pill warn">비활성</span>'}</td><td>${fmtPhone(c.phone)}</td><td>${esc(c.category || '')}</td>
+    <td><button class="sec" onclick="toggleOpt('${c.id}',${!c.opt_out})">${c.opt_out ? '거부해제' : '수신거부'}</button> <button class="sec" onclick="delContact('${c.id}')">삭제</button></td></tr>`).join('') || '<tr><td colspan="4" class="mut">수신자가 없습니다.</td></tr>';
+  const pages = Math.max(1, Math.ceil((r.total || 0) / 50));
+  $('#ctPage').textContent = `${ctPage} / ${pages} (총 ${(r.total || 0).toLocaleString()}명)`;
+  $('#ctPrev').disabled = ctPage <= 1; $('#ctNext').disabled = ctPage >= pages;
+  loadStats();
+}
+window.toggleOpt = async (id, v) => { await api('contacts', { method: 'PATCH', body: { id, opt_out: v } }); loadContacts(); };
+window.delContact = async (id) => { if (confirm('삭제할까요?')) { await api('contacts', { method: 'DELETE', body: { id } }); loadContacts(); } };
+$('#ctPrev').onclick = () => { ctPage--; loadContacts(); };
+$('#ctNext').onclick = () => { ctPage++; loadContacts(); };
+let qt; $('#qSearch').oninput = () => { clearTimeout(qt); qt = setTimeout(() => { ctPage = 1; loadContacts(); }, 350); };
+$('#qStatus').onchange = () => { ctPage = 1; loadContacts(); };
+$('#btnAdd').onclick = async () => {
+  try {
+    await api('contacts', { method: 'POST', body: { name: $('#nName').value, phone: $('#nPhone').value, category: $('#nCat').value } });
+    $('#nName').value = ''; $('#nPhone').value = ''; loadContacts(); loadCategories();
+  } catch (e) { alert(e.message); }
+};
+
+// CSV 파서 (따옴표/BOM 지원)
+function parseCSV(text) {
+  text = text.replace(/^\uFEFF/, ''); const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ',') { row.push(cur); cur = ''; }
+    else if (ch === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+    else if (ch !== '\r') cur += ch;
+  }
+  if (cur || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter((r) => r.some((x) => x.trim()));
+}
+$('#csvFile').onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const buf = await f.arrayBuffer();
+  let text = new TextDecoder('utf-8').decode(buf);
+  if (text.includes('\uFFFD')) text = new TextDecoder('euc-kr').decode(buf); // 엑셀 CSV(ANSI) 대응
+  const rows = parseCSV(text);
+  if (!rows.length) return ($('#importMsg').textContent = '내용이 없습니다.');
+  const head = rows[0].map((h) => h.trim());
+  const find = (...names) => head.findIndex((h) => names.some((n) => h.includes(n)));
+  let iN = find('이름', '성명', 'name'), iP = find('연락처', '전화', '휴대', 'phone', '번호'), iC = find('구분', '분류', '지구', '마을', 'category'), iM = find('메모', '비고');
+  let start = 1;
+  if (iN < 0 || iP < 0) { iN = 0; iP = 1; iC = 2; iM = 3; start = /\d{3}/.test(rows[0][1] || '') ? 0 : 1; }
+  const data = rows.slice(start).map((r) => ({ name: r[iN], phone: r[iP], category: iC >= 0 ? r[iC] : '', memo: iM >= 0 ? r[iM] : '' }));
+  let ok = 0, invalid = 0, dup = 0;
+  for (let i = 0; i < data.length; i += 500) {
+    $('#importMsg').textContent = `가져오는 중… ${Math.min(i + 500, data.length).toLocaleString()} / ${data.length.toLocaleString()}`;
+    const r = await api('import', { method: 'POST', body: { rows: data.slice(i, i + 500) } });
+    ok += r.imported; invalid += r.invalid; dup += r.duplicate_in_batch;
+  }
+  $('#importMsg').textContent = `완료: ${ok.toLocaleString()}명 등록/갱신 · 형식오류 ${invalid} · 중복 ${dup}`;
+  e.target.value = ''; ctPage = 1; loadContacts(); loadCategories();
+};
+
+// ---------- 이력 ----------
+async function loadHistory() {
+  $('#histDetail').classList.add('hide');
+  const r = await api('messages', { query: { page: 1, size: 50 } });
+  const pill = { done: 'ok', partial: 'warn', failed: 'bad', sending: 'warn', draft: '' };
+  const label = { done: '완료', partial: '일부실패', failed: '실패', sending: '진행중', draft: '임시' };
+  $('#histList').innerHTML = r.rows.map((m) => `<div class="card" onclick="showMsg('${m.id}')">
+    <div class="row"><b>${esc(m.title || '')}</b><span style="text-align:right;flex:0 0 auto"><span class="pill ${pill[m.status]}">${label[m.status]}</span> <span class="pill">${m.provider === 'solapi' ? '실발송' : '연습'}</span></span></div>
+    <div class="mut">${fmtDate(m.sent_at || m.created_at)} · ${m.msg_type} · 성공 ${m.success_count}/${m.total_count}${m.fail_count ? ' · 실패 ' + m.fail_count : ''}</div></div>`).join('') || '<div class="card mut">발송 이력이 없습니다.</div>';
+}
+window.showMsg = async (id) => {
+  const r = await api('messages', { query: { id } }); const m = r.message;
+  $('#histDetail').innerHTML = `<h2>${esc(m.title || '')}</h2><div class="mut">${fmtDate(m.sent_at)} · 발신 ${fmtPhone(m.sender_number)} · ${m.msg_type} · ${m.byte_len}byte</div>
+    <div class="msgbox" style="margin:10px 0">${esc(m.body)}</div>
+    <p>성공 ${m.success_count} · 실패 ${m.fail_count} · 전체 ${m.total_count}</p>
+    ${r.failed.length ? '<table>' + r.failed.map((f) => `<tr><td>${esc(f.name)}</td><td>${fmtPhone(f.phone)}</td><td class="mut">${esc(f.error)}</td></tr>`).join('') + '</table>' : ''}
+    <div class="row" style="margin-top:10px"><button class="sec" onclick="reuse('${m.id}')">이 내용 재사용</button>${m.status !== 'done' ? `<button onclick="resume('${m.id}')">${r.failed_total ? '실패건 재시도' : '이어서 발송'}</button>` : ''}</div>`;
+  $('#histDetail').dataset.body = m.body; $('#histDetail').dataset.title = m.title || '';
+  $('#histDetail').classList.remove('hide'); $('#histDetail').scrollIntoView({ behavior: 'smooth' });
+};
+window.reuse = () => {
+  const d = $('#histDetail'); $('#msgBody').value = d.dataset.body; $('#msgTitle').value = d.dataset.title; updateBytes();
+  document.querySelector('nav button[data-tab=send]').click();
+};
+window.resume = async (id) => {
+  if (!confirm('남은 대상에게 발송을 이어갑니다.')) return;
+  await api('retry_failed', { method: 'POST', body: { message_id: id } });
+  let last; do { last = await api('send_chunk', { method: 'POST', body: { message_id: id } }); } while (last.pending > 0);
+  alert(`처리 완료: 성공 ${last.sent} · 실패 ${last.failed}`); loadHistory();
+};
+
+// ---------- 서비스워커 ----------
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+token ? start() : showLogin();
+</script>
+</body>
+</html>
