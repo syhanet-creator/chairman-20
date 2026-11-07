@@ -20,6 +20,55 @@ async function getSettings() {
   return data[0];
 }
 
+const DEDUPE_DAYS = 10;
+const normText = (t) => String(t || '').replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
+
+// 실제로 발송될 최종 본문 (광고성 문구 포함)
+function buildText(body, isAd, settings) {
+  let text = String(body || '').trim();
+  if (text && isAd) {
+    if (!text.startsWith('(광고)')) text = `(광고)${settings.org_name} ${text}`;
+    text += `\n${settings.ad_footer}`;
+  }
+  return text;
+}
+
+// 최근 DEDUPE_DAYS일 이내, 같은 공급자(실발송/연습)로 보낸 동일 본문 메시지의 수신자 번호 집합
+async function dupPhones({ text, provider, excludeId, statuses }) {
+  const set = new Set();
+  const key = normText(text);
+  if (!key) return set;
+  const since = new Date(Date.now() - DEDUPE_DAYS * 86400000).toISOString();
+  const ids = [];
+  for (let off = 0; ; off += 1000) {
+    const { data } = await sb(
+      `jsms_messages?select=id,body&provider=eq.${enc(provider)}&created_at=gte.${enc(since)}&order=created_at.desc&limit=1000&offset=${off}`);
+    for (const m of data) if (m.id !== excludeId && normText(m.body) === key) ids.push(m.id);
+    if (data.length < 1000) break;
+  }
+  for (let i = 0; i < ids.length; i += 50) {
+    const part = ids.slice(i, i + 50).join(',');
+    for (let o = 0; ; o += 1000) {
+      const { data } = await sb(
+        `jsms_message_recipients?select=phone&message_id=in.(${part})&status=in.(${statuses.join(',')})&order=id.asc&limit=1000&offset=${o}`);
+      data.forEach((r) => set.add(r.phone));
+      if (data.length < 1000) break;
+    }
+  }
+  return set;
+}
+
+async function loadTargets(filter) {
+  const rows = [];
+  for (let off = 0; ; off += 1000) {
+    const { data } = await sb(
+      `jsms_contacts?select=id,name,phone,category&${targetQuery(filter)}&order=created_at.asc,id.asc&limit=1000&offset=${off}`);
+    rows.push(...data);
+    if (data.length < 1000) break;
+  }
+  return rows;
+}
+
 const handlers = {
   // ---------- 로그인 ----------
   async login(req, body) {
@@ -171,7 +220,8 @@ const handlers = {
       const rc = await sb(`jsms_message_recipients?select=id&message_id=eq.${enc(query.id)}&status=eq.failed&limit=1`, { count: true });
       const fails = await sb(`jsms_message_recipients?select=name,phone,error&message_id=eq.${enc(query.id)}&status=eq.failed&limit=200`);
       const pc = await sb(`jsms_message_recipients?select=id&message_id=eq.${enc(query.id)}&status=eq.pending&limit=1`, { count: true });
-      return [200, { message: data[0], failed_total: rc.total, pending_total: pc.total || 0, failed: fails.data }];
+      const sk = await sb(`jsms_message_recipients?select=id&message_id=eq.${enc(query.id)}&status=eq.skipped&limit=1`, { count: true });
+      return [200, { message: data[0], failed_total: rc.total, pending_total: pc.total || 0, skipped_total: sk.total || 0, failed: fails.data }];
     }
     const size = Math.min(100, parseInt(query.size, 10) || 30);
     const page = Math.max(1, parseInt(query.page, 10) || 1);
@@ -180,43 +230,50 @@ const handlers = {
     return [200, { rows: data, total }];
   },
 
-  // ---------- 발송 전 미리보기: 대상 구분별 인원 (발송 조건과 동일한 쿼리) ----------
+  // ---------- 발송 전 미리보기: 대상 구분별 인원 (최근 10일 동일 본문 수신자 자동 제외) ----------
   async send_preview(req, body) {
+    const settings = await getSettings();
     const filter = { category: body.category || null, tag: body.tag || null };
+    const targets = await loadTargets(filter);
+    const text = buildText(body.body, !!body.is_ad, settings);
+    const dup = text ? await dupPhones({ text, provider: settings.provider, statuses: ['sent', 'pending'] }) : new Set();
+    const eligible = targets.filter((c) => !dup.has(c.phone));
     const counts = new Map();
-    let total = 0, offset = 0;
-    for (;;) {
-      const { data } = await sb(
-        `jsms_contacts?select=category&${targetQuery(filter)}&order=id.asc&limit=1000&offset=${offset}`);
-      for (const r of data) {
-        const k = r.category || '(구분 없음)';
-        counts.set(k, (counts.get(k) || 0) + 1);
-        total++;
-      }
-      if (data.length < 1000) break;
-      offset += 1000;
+    for (const r of eligible) {
+      const k = r.category || '(구분 없음)';
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    const dupCounts = new Map();
+    for (const r of targets) if (dup.has(r.phone)) {
+      const k = r.category || '(구분 없음)';
+      dupCounts.set(k, (dupCounts.get(k) || 0) + 1);
     }
     const excluded = (await sb('jsms_contacts?select=id&or=(opt_out.eq.true,active.eq.false)&limit=1', { count: true })).total || 0;
-    const categories = [...counts.entries()].map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ko'));
-    return [200, { total, categories, excluded }];
+    const toList = (m) => [...m.entries()].map(([name, count]) => ({ name, count }))
+      .sort((x, y) => y.count - x.count || x.name.localeCompare(y.name, 'ko'));
+    return [200, {
+      total: eligible.length, categories: toList(counts), excluded,
+      duplicates: targets.length - eligible.length, duplicate_categories: toList(dupCounts), dedupe_days: DEDUPE_DAYS,
+    }];
   },
 
-  // ---------- 발송 1단계: 메시지+수신자 확정 ----------
+  // ---------- 발송 1단계: 메시지+수신자 확정 (동일 본문 중복 수신자는 skipped 처리) ----------
   async send_create(req, body) {
     const settings = await getSettings();
-    let text = String(body.body || '').trim();
-    if (!text) return [400, { error: '문자 내용이 없습니다.' }];
     const isAd = !!body.is_ad;
-    if (isAd) {
-      if (!text.startsWith('(광고)')) text = `(광고)${settings.org_name} ${text}`;
-      text += `\n${settings.ad_footer}`;
-    }
+    const text = buildText(body.body, isAd, settings);
+    if (!text) return [400, { error: '문자 내용이 없습니다.' }];
     const filter = { category: body.category || null, tag: body.tag || null };
-    const cnt = await sb(`jsms_contacts?select=id&${targetQuery(filter)}&limit=1`, { count: true });
-    if (!cnt.total) return [400, { error: '발송 대상이 없습니다.' }];
-    if (body.expected_total !== undefined && Number(body.expected_total) !== cnt.total) {
-      return [409, { error: `확인하신 대상 인원(${body.expected_total}명)과 현재 인원(${cnt.total}명)이 달라 발송을 중단했습니다. 다시 확인해 주세요.` }];
+    const targets = await loadTargets(filter);
+    if (!targets.length) return [400, { error: '발송 대상이 없습니다.' }];
+    const dup = await dupPhones({ text, provider: settings.provider, statuses: ['sent', 'pending'] });
+    const eligible = targets.filter((c) => !dup.has(c.phone));
+    const skipped = targets.filter((c) => dup.has(c.phone));
+    if (!eligible.length) {
+      return [400, { error: `대상 ${targets.length}명 모두 최근 ${DEDUPE_DAYS}일 이내 같은 내용을 받았거나 발송 대기 중이라 보낼 사람이 없습니다.` }];
+    }
+    if (body.expected_total !== undefined && Number(body.expected_total) !== eligible.length) {
+      return [409, { error: `확인하신 대상 인원(${body.expected_total}명)과 현재 인원(${eligible.length}명)이 달라 발송을 중단했습니다. 다시 확인해 주세요.` }];
     }
 
     const { data: m } = await sb('jsms_messages', {
@@ -230,30 +287,24 @@ const handlers = {
         is_ad: isAd,
         sender_number: settings.sender_number,
         provider: settings.provider,
-        target_filter: filter,
-        total_count: cnt.total,
+        target_filter: { ...filter, duplicates_skipped: skipped.length, dedupe_days: DEDUPE_DAYS },
+        total_count: eligible.length,
         status: 'sending',
         sent_at: new Date().toISOString(),
       },
     });
     const messageId = m[0].id;
 
-    // 수신자 스냅샷 저장 (1000명씩 읽어 500명씩 insert)
-    let offset = 0;
-    for (;;) {
-      const { data } = await sb(
-        `jsms_contacts?select=id,name,phone&${targetQuery(filter)}&order=created_at.asc,id.asc&limit=1000&offset=${offset}`);
-      for (let i = 0; i < data.length; i += 500) {
-        const part = data.slice(i, i + 500).map((c) => ({
-          message_id: messageId, contact_id: c.id, name: c.name, phone: c.phone,
-        }));
-        await sb('jsms_message_recipients', { method: 'POST', body: part });
-      }
-      if (data.length < 1000) break;
-      offset += 1000;
+    const rows = [
+      ...eligible.map((c) => ({ message_id: messageId, contact_id: c.id, name: c.name, phone: c.phone })),
+      ...skipped.map((c) => ({ message_id: messageId, contact_id: c.id, name: c.name, phone: c.phone,
+        status: 'skipped', error: `최근 ${DEDUPE_DAYS}일 이내 동일 내용 수신` })),
+    ];
+    for (let i = 0; i < rows.length; i += 500) {
+      await sb('jsms_message_recipients', { method: 'POST', body: rows.slice(i, i + 500) });
     }
-    await audit('send.create', { messageId, total: cnt.total, provider: settings.provider });
-    return [200, { message_id: messageId, total: cnt.total, msg_type: m[0].msg_type, provider: settings.provider }];
+    await audit('send.create', { messageId, total: eligible.length, duplicates_skipped: skipped.length, provider: settings.provider });
+    return [200, { message_id: messageId, total: eligible.length, skipped: skipped.length, msg_type: m[0].msg_type, provider: settings.provider }];
   },
 
   // ---------- 발송 2단계: 대기 건을 청크 단위로 처리 (클라이언트가 반복 호출) ----------
@@ -266,8 +317,20 @@ const handlers = {
     const settings = await getSettings();
     const size = settings.chunk_size || 500;
 
-    const { data: pend } = await sb(
+    let { data: pend } = await sb(
       `jsms_message_recipients?select=id,phone&message_id=eq.${enc(id)}&status=eq.pending&order=id.asc&limit=${size}`);
+
+    // 이어서 발송/재시도 시에도 최근 10일 이내 다른 메시지로 이미 받은 사람은 건너뜀
+    if (pend.length) {
+      const got = await dupPhones({ text: msg.body, provider: msg.provider, excludeId: id, statuses: ['sent'] });
+      const dupIds = pend.filter((r) => got.has(r.phone)).map((r) => r.id);
+      if (dupIds.length) {
+        await sb(`jsms_message_recipients?id=in.(${dupIds.join(',')})`, {
+          method: 'PATCH', body: { status: 'skipped', error: `최근 ${DEDUPE_DAYS}일 이내 동일 내용 수신` },
+        });
+        pend = pend.filter((r) => !got.has(r.phone));
+      }
+    }
 
     if (pend.length) {
       const items = pend.map((r) => ({ to: r.phone, text: msg.body, type: msg.msg_type }));

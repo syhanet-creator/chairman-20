@@ -262,7 +262,7 @@ $('#btnSaveTpl').onclick = async () => {
   await api('templates', { method: 'POST', body: { title, body } }); await loadTemplates(); alert('템플릿에 저장했습니다.');
 };
 // 2단계 확인 팝업: 1) 대상 구분·인원 확인 → 2) 최종 확인. 확정하면 true
-function confirmSend({ heading, categories, total, excluded, body, msgType, from, live, note }) {
+function confirmSend({ heading, categories, total, excluded, duplicates, dedupeDays, body, msgType, from, live, note }) {
   return new Promise((resolve) => {
     const m = $('#modal'), sh = $('#sheet');
     const done = (v) => { m.classList.add('hide'); sh.innerHTML = ''; resolve(v); };
@@ -273,6 +273,7 @@ function confirmSend({ heading, categories, total, excluded, body, msgType, from
         <div class="big">총 ${total.toLocaleString()}명</div>
         <table><thead><tr><th>대상 구분</th><th style="text-align:right">인원</th></tr></thead><tbody>${rows}</tbody></table>
         ${excluded ? `<p class="mut">수신거부·비활성 ${excluded.toLocaleString()}명은 제외됩니다.</p>` : ''}
+        ${duplicates ? `<div class="warn">최근 ${dedupeDays}일 이내 같은 내용을 받았거나 발송 대기 중인 <b>${duplicates.toLocaleString()}명</b>은 자동 제외했습니다.</div>` : ''}
         ${note ? `<p class="mut">${esc(note)}</p>` : ''}
         <label>문자 내용</label><div class="msgbox">${esc(body)}</div>
         <div class="row"><button class="sec" id="mCancel">취소</button><button id="mNext">다음 (최종 확인)</button></div>`;
@@ -301,11 +302,11 @@ $('#btnPrepare').onclick = async () => {
   const btn = $('#btnPrepare'); btn.disabled = true;
   try {
     const cat = $('#selCat').value;
-    const pv = await api('send_preview', { method: 'POST', body: { category: cat } });
-    if (!pv.total) return alert('발송 대상이 없습니다.');
+    const pv = await api('send_preview', { method: 'POST', body: { category: cat, body, is_ad: $('#isAd').checked } });
+    if (!pv.total) return alert(pv.duplicates ? `대상 ${pv.duplicates.toLocaleString()}명 모두 최근 ${pv.dedupe_days}일 이내 같은 내용을 받았거나 발송 대기 중이라 보낼 사람이 없습니다.` : '발송 대상이 없습니다.');
     const payload = { body, title: $('#msgTitle').value.trim(), category: cat, is_ad: $('#isAd').checked, expected_total: pv.total };
     const ok = await confirmSend({
-      heading: '발송 전 확인', categories: pv.categories, total: pv.total, excluded: pv.excluded,
+      heading: '발송 전 확인', categories: pv.categories, total: pv.total, excluded: pv.excluded, duplicates: pv.duplicates, dedupeDays: pv.dedupe_days,
       body, msgType: byteLen(body) > 90 ? 'LMS' : 'SMS', from: settings.sender_number, live: settings.provider === 'solapi',
       note: payload.is_ad ? '광고성 문자: (광고) 표기와 수신거부 문구가 자동으로 추가됩니다.' : '',
     });
@@ -402,7 +403,7 @@ window.showMsg = async (id) => {
   const r = await api('messages', { query: { id } }); const m = r.message;
   $('#histDetail').innerHTML = `<h2>${esc(m.title || '')}</h2><div class="mut">${fmtDate(m.sent_at)} · 발신 ${fmtPhone(m.sender_number)} · ${m.msg_type} · ${m.byte_len}byte</div>
     <div class="msgbox" style="margin:10px 0">${esc(m.body)}</div>
-    <p>성공 ${m.success_count} · 실패 ${m.fail_count} · 전체 ${m.total_count}</p>
+    <p>성공 ${m.success_count} · 실패 ${m.fail_count} · 전체 ${m.total_count}${r.skipped_total ? ` · 중복 제외 ${r.skipped_total}` : ''}</p>
     ${r.failed.length ? '<table>' + r.failed.map((f) => `<tr><td>${esc(f.name)}</td><td>${fmtPhone(f.phone)}</td><td class="mut">${esc(f.error)}</td></tr>`).join('') + '</table>' : ''}
     <div class="row" style="margin-top:10px"><button class="sec" onclick="reuse('${m.id}')">이 내용 재사용</button>${m.status !== 'done' ? `<button onclick="resume('${m.id}')">${r.failed_total ? '실패건 재시도' : '이어서 발송'}</button>` : ''}</div>`;
   $('#histDetail').dataset.body = m.body; $('#histDetail').dataset.title = m.title || '';
