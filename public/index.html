@@ -42,6 +42,15 @@ nav button.on{color:var(--pri)}
 .banner.practice{background:#fff1d9;color:var(--warn)}.banner.live{background:#e1f4e8;color:var(--ok)}
 #login{max-width:360px;margin:18vh auto;padding:0 16px}
 .msgbox{white-space:pre-wrap;background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:14px}
+.modal{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:50;display:flex;align-items:flex-end;justify-content:center}
+.modal>.sheet{background:#fff;width:100%;max-width:560px;max-height:92vh;overflow:auto;border-radius:16px 16px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))}
+@media(min-width:600px){.modal{align-items:center}.modal>.sheet{border-radius:16px}}
+.sheet h3{margin:0 0 10px;font-size:17px}
+.sheet .big{font-size:26px;font-weight:800;color:var(--bad);margin:4px 0 10px}
+.sheet table td:last-child{text-align:right;font-weight:700;white-space:nowrap}
+.sheet .warn{background:#fff1d9;color:var(--warn);border-radius:8px;padding:8px 10px;font-size:13px;margin:10px 0}
+.sheet .row{margin-top:12px}
+.sheet .row button{flex:1}
 </style>
 </head>
 <body>
@@ -81,16 +90,6 @@ nav button.on{color:var(--pri)}
       <div class="row" style="margin-top:10px">
         <button class="sec" id="btnSaveTpl">템플릿 저장</button>
         <button id="btnPrepare">발송 확인</button>
-      </div>
-    </div>
-    <div id="confirmBox" class="card hide">
-      <h2>발송 전 확인</h2>
-      <p>발신번호 <b id="cfFrom"></b></p>
-      <p>수신 대상 <b id="cfCount"></b>명 · <span id="cfType"></span></p>
-      <div class="msgbox" id="cfBody"></div>
-      <div class="row" style="margin-top:10px">
-        <button class="sec" id="btnCancel">취소</button>
-        <button class="bad" id="btnGo">발송 시작</button>
       </div>
     </div>
     <div id="progBox" class="card hide">
@@ -157,6 +156,8 @@ nav button.on{color:var(--pri)}
   <button data-tab="settings">⚙️<br>설정</button>
 </nav>
 </div>
+
+<div id="modal" class="modal hide"><div class="sheet" id="sheet"></div></div>
 
 <script>
 const $ = (s) => document.querySelector(s);
@@ -260,31 +261,59 @@ $('#btnSaveTpl').onclick = async () => {
   if (!body) return alert('내용을 입력하세요.');
   await api('templates', { method: 'POST', body: { title, body } }); await loadTemplates(); alert('템플릿에 저장했습니다.');
 };
+// 2단계 확인 팝업: 1) 대상 구분·인원 확인 → 2) 최종 확인. 확정하면 true
+function confirmSend({ heading, categories, total, excluded, body, msgType, from, live, note }) {
+  return new Promise((resolve) => {
+    const m = $('#modal'), sh = $('#sheet');
+    const done = (v) => { m.classList.add('hide'); sh.innerHTML = ''; resolve(v); };
+    const rows = categories.map((c) => `<tr><td>${esc(c.name)}</td><td>${c.count.toLocaleString()}명</td></tr>`).join('');
+    const step1 = () => {
+      sh.innerHTML = `<h3>${esc(heading)} <span class="mut">(1/2 대상 확인)</span></h3>
+        <div class="mut">발신번호 ${fmtPhone(from)} · ${msgType === 'LMS' ? '장문(LMS)' : '단문(SMS)'} · ${live ? '실발송' : '연습모드'}</div>
+        <div class="big">총 ${total.toLocaleString()}명</div>
+        <table><thead><tr><th>대상 구분</th><th style="text-align:right">인원</th></tr></thead><tbody>${rows}</tbody></table>
+        ${excluded ? `<p class="mut">수신거부·비활성 ${excluded.toLocaleString()}명은 제외됩니다.</p>` : ''}
+        ${note ? `<p class="mut">${esc(note)}</p>` : ''}
+        <label>문자 내용</label><div class="msgbox">${esc(body)}</div>
+        <div class="row"><button class="sec" id="mCancel">취소</button><button id="mNext">다음 (최종 확인)</button></div>`;
+      $('#mCancel').onclick = () => done(false);
+      $('#mNext').onclick = step2;
+    };
+    const step2 = () => {
+      const names = categories.map((c) => `${c.name} ${c.count.toLocaleString()}명`).join(', ');
+      sh.innerHTML = `<h3>최종 확인 <span class="mut">(2/2)</span></h3>
+        <p><b>${esc(names)}</b><br>총 <b>${total.toLocaleString()}명</b>에게 문자를 발송하시겠습니까?</p>
+        <div class="warn">${live ? '실제 문자가 즉시 발송되며 취소할 수 없습니다.' : '연습모드입니다. 실제 문자는 발송되지 않습니다.'}</div>
+        <div class="row"><button class="sec" id="mBack">이전</button><button class="bad" id="mGo">${total.toLocaleString()}명에게 발송</button></div>`;
+      $('#mBack').onclick = step1;
+      $('#mGo').onclick = () => done(true);
+    };
+    m.classList.remove('hide'); step1();
+  });
+}
+$('#modal').onclick = (e) => { if (e.target.id === 'modal') e.stopPropagation(); }; // 바깥 클릭으로 닫히지 않음(실수 방지)
+
+let sending = false;
 $('#btnPrepare').onclick = async () => {
+  if (sending) return;
   const body = $('#msgBody').value.trim();
   if (!body) return alert('내용을 입력하세요.');
-  const cat = $('#selCat').value;
-  const q = cat ? `&category=${encodeURIComponent(cat)}` : '';
-  const c = await api('contacts', { query: { size: 1, page: 1, category: cat } });
-  const s = await api('stats');
-  const count = cat ? c.total : s.sendable;
-  pending = { body, title: $('#msgTitle').value.trim(), category: cat, is_ad: $('#isAd').checked };
-  $('#cfFrom').textContent = fmtPhone(settings.sender_number);
-  $('#cfCount').textContent = count.toLocaleString() + (cat ? ' (구분 전체 중 수신거부 제외 후 확정)' : '');
-  $('#cfType').textContent = byteLen(body) > 90 ? '장문(LMS)' : '단문(SMS)';
-  $('#cfBody').textContent = body;
-  $('#confirmBox').classList.remove('hide');
-  $('#confirmBox').scrollIntoView({ behavior: 'smooth' });
-};
-$('#btnCancel').onclick = () => { pending = null; $('#confirmBox').classList.add('hide'); };
-$('#btnGo').onclick = async () => {
-  if (!pending) return;
-  const live = settings.provider === 'solapi';
-  if (!confirm(live ? '실제 문자가 발송됩니다. 진행할까요?' : '연습모드로 진행합니다.')) return;
-  $('#btnGo').disabled = true; $('#confirmBox').classList.add('hide'); $('#progBox').classList.remove('hide');
+  const btn = $('#btnPrepare'); btn.disabled = true;
   try {
+    const cat = $('#selCat').value;
+    const pv = await api('send_preview', { method: 'POST', body: { category: cat } });
+    if (!pv.total) return alert('발송 대상이 없습니다.');
+    const payload = { body, title: $('#msgTitle').value.trim(), category: cat, is_ad: $('#isAd').checked, expected_total: pv.total };
+    const ok = await confirmSend({
+      heading: '발송 전 확인', categories: pv.categories, total: pv.total, excluded: pv.excluded,
+      body, msgType: byteLen(body) > 90 ? 'LMS' : 'SMS', from: settings.sender_number, live: settings.provider === 'solapi',
+      note: payload.is_ad ? '광고성 문자: (광고) 표기와 수신거부 문구가 자동으로 추가됩니다.' : '',
+    });
+    if (!ok) return;
+    sending = true;
+    $('#progBox').classList.remove('hide'); $('#progBar').style.width = '0%';
     $('#progTxt').textContent = '수신자 확정 중…';
-    const cr = await api('send_create', { method: 'POST', body: pending });
+    const cr = await api('send_create', { method: 'POST', body: payload });
     let last;
     for (;;) {
       last = await api('send_chunk', { method: 'POST', body: { message_id: cr.message_id } });
@@ -294,9 +323,9 @@ $('#btnGo').onclick = async () => {
       if (last.pending === 0) break;
     }
     $('#progTxt').textContent += ' — 완료';
-    pending = null; $('#msgBody').value = ''; $('#msgTitle').value = ''; updateBytes();
-  } catch (e) { $('#progTxt').textContent = '오류: ' + e.message + ' (이력 탭에서 이어서 확인할 수 있습니다)'; }
-  $('#btnGo').disabled = false;
+    $('#msgBody').value = ''; $('#msgTitle').value = ''; updateBytes();
+  } catch (e) { $('#progTxt').textContent = '오류: ' + e.message + ' (이력 탭에서 이어서 확인할 수 있습니다)'; $('#progBox').classList.remove('hide'); }
+  finally { sending = false; btn.disabled = false; }
 };
 
 // ---------- 수신자 ----------
@@ -384,10 +413,23 @@ window.reuse = () => {
   document.querySelector('nav button[data-tab=send]').click();
 };
 window.resume = async (id) => {
-  if (!confirm('남은 대상에게 발송을 이어갑니다.')) return;
-  await api('retry_failed', { method: 'POST', body: { message_id: id } });
-  let last; do { last = await api('send_chunk', { method: 'POST', body: { message_id: id } }); } while (last.pending > 0);
-  alert(`처리 완료: 성공 ${last.sent} · 실패 ${last.failed}`); loadHistory();
+  if (sending) return;
+  const r = await api('messages', { query: { id } }); const m = r.message;
+  const remain = (r.pending_total || 0) + (r.failed_total || 0);
+  if (!remain) return alert('남은 발송 대상이 없습니다.');
+  const cat = (m.target_filter && m.target_filter.category) || '전체 회원';
+  const ok = await confirmSend({
+    heading: r.failed_total ? '실패건 재시도 확인' : '이어서 발송 확인',
+    categories: [{ name: `${cat} (미발송 ${r.pending_total || 0} + 실패 ${r.failed_total || 0})`, count: remain }],
+    total: remain, excluded: 0, body: m.body, msgType: m.msg_type, from: m.sender_number, live: m.provider === 'solapi',
+  });
+  if (!ok) return;
+  sending = true;
+  try {
+    await api('retry_failed', { method: 'POST', body: { message_id: id } });
+    let last; do { last = await api('send_chunk', { method: 'POST', body: { message_id: id } }); } while (last.pending > 0);
+    alert(`처리 완료: 성공 ${last.sent} · 실패 ${last.failed}`); loadHistory();
+  } catch (e) { alert(e.message); } finally { sending = false; }
 };
 
 // ---------- 서비스워커 ----------

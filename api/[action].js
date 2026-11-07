@@ -170,13 +170,36 @@ const handlers = {
       const { data } = await sb(`jsms_messages?id=eq.${enc(query.id)}`);
       const rc = await sb(`jsms_message_recipients?select=id&message_id=eq.${enc(query.id)}&status=eq.failed&limit=1`, { count: true });
       const fails = await sb(`jsms_message_recipients?select=name,phone,error&message_id=eq.${enc(query.id)}&status=eq.failed&limit=200`);
-      return [200, { message: data[0], failed_total: rc.total, failed: fails.data }];
+      const pc = await sb(`jsms_message_recipients?select=id&message_id=eq.${enc(query.id)}&status=eq.pending&limit=1`, { count: true });
+      return [200, { message: data[0], failed_total: rc.total, pending_total: pc.total || 0, failed: fails.data }];
     }
     const size = Math.min(100, parseInt(query.size, 10) || 30);
     const page = Math.max(1, parseInt(query.page, 10) || 1);
     const { data, total } = await sb(
       `jsms_messages?select=*&order=created_at.desc&limit=${size}&offset=${(page - 1) * size}`, { count: true });
     return [200, { rows: data, total }];
+  },
+
+  // ---------- 발송 전 미리보기: 대상 구분별 인원 (발송 조건과 동일한 쿼리) ----------
+  async send_preview(req, body) {
+    const filter = { category: body.category || null, tag: body.tag || null };
+    const counts = new Map();
+    let total = 0, offset = 0;
+    for (;;) {
+      const { data } = await sb(
+        `jsms_contacts?select=category&${targetQuery(filter)}&order=id.asc&limit=1000&offset=${offset}`);
+      for (const r of data) {
+        const k = r.category || '(구분 없음)';
+        counts.set(k, (counts.get(k) || 0) + 1);
+        total++;
+      }
+      if (data.length < 1000) break;
+      offset += 1000;
+    }
+    const excluded = (await sb('jsms_contacts?select=id&or=(opt_out.eq.true,active.eq.false)&limit=1', { count: true })).total || 0;
+    const categories = [...counts.entries()].map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ko'));
+    return [200, { total, categories, excluded }];
   },
 
   // ---------- 발송 1단계: 메시지+수신자 확정 ----------
@@ -192,6 +215,9 @@ const handlers = {
     const filter = { category: body.category || null, tag: body.tag || null };
     const cnt = await sb(`jsms_contacts?select=id&${targetQuery(filter)}&limit=1`, { count: true });
     if (!cnt.total) return [400, { error: '발송 대상이 없습니다.' }];
+    if (body.expected_total !== undefined && Number(body.expected_total) !== cnt.total) {
+      return [409, { error: `확인하신 대상 인원(${body.expected_total}명)과 현재 인원(${cnt.total}명)이 달라 발송을 중단했습니다. 다시 확인해 주세요.` }];
+    }
 
     const { data: m } = await sb('jsms_messages', {
       method: 'POST',
